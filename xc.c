@@ -2,6 +2,8 @@
  * xc
  * by stx4
  */
+	
+#define _POSIX_SOURCE
 
 #include <fcntl.h>
 #include <ctype.h>
