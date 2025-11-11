@@ -260,7 +260,7 @@ void state_draw(xc_state_t* state) {
 		}
 	}
 
-	printf("\e[%d;1H\e[107;30m%*s\e[%d;1H", state->scr_h + 1,
+	printf("\e[%d;1H\e[48;5;236m\e[38m%*s\e[%d;1H", state->scr_h + 1,
 		state->scr_w, "", state->scr_h);
 	sprintf(state->status_line, "%d,%d-%d  %5.1f%%", state->buf_y + 1, 
 		state->buf_x, state->cur_x + 1, state->buf_y > 0 ? 
@@ -281,15 +281,14 @@ void state_draw(xc_state_t* state) {
 /* --- STATE HANDLERS --- */
 
 bool state_init(xc_state_t* state, char* path) {
-	struct stat st;
-	stat(path, &st);
-	
 	int fd = open(path, O_RDONLY);
 	if (!fd) {
-		fd = open(path, O_RDONLY | O_CREAT);
+		fd = open(path, O_RDWR | O_CREAT, 0644);
 		if (!fd) return false;
-		stat(path, &st);
 	}
+
+	struct stat st;
+	stat(path, &st);
 
 	char* raw_buffer = malloc(st.st_size);
 	int rd = read(fd, raw_buffer, st.st_size);
@@ -303,22 +302,32 @@ bool state_init(xc_state_t* state, char* path) {
 	for (int i = 0; i < st.st_size; i++)
 		if (raw_buffer[i] == '\n') state->buffer.count++;
 	
-	int last = 0, line = 0;
+	int last = 0, cur_line = 0;
 	state->buffer.lines = calloc(state->buffer.count, sizeof(xc_line_t));
 	for (int i = 0; i < st.st_size; i++) {
 		if (raw_buffer[i] == '\n') {
 			int len = i - last;
-			xc_line_t* cur = &state->buffer.lines[line];
+			xc_line_t* cur = &state->buffer.lines[cur_line];
 			cur->cap = len;
 			cur->size = len + 32;
 			cur->text = calloc(1, cur->size);
 			memcpy(cur->text, raw_buffer + last, len);
 
-			last = i + 1, line++;
+			last = i + 1, cur_line++;
 		}
 	}
 
 	free(raw_buffer);
+
+	if (state->buffer.count == 0) {
+		state->buffer.count = 1;
+		state->buffer.lines = malloc(sizeof(xc_line_t));
+
+		xc_line_t* line = &state->buffer.lines[0];
+		line->cap = 0;
+		line->size = 32;
+		line->text = calloc(line->size, 1);
+	}
 
 	state->mode = COMMAND;
 	state->dirty = false;
