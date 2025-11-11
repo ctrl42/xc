@@ -266,8 +266,8 @@ void state_draw(xc_state_t* state) {
 	printf("%s%s    %s\e[%d;%dH%s\e[0m", state->filename,
 		state->dirty ? "*" : " ",
 		state->mode == INSERT ? "-- insert --" : "", 
-		state->scr_h + 1, (int)state->scr_w - strlen(state->status_line) 
-		+ 1, state->status_line);
+		state->scr_h + 1, (int)(state->scr_w - strlen(state->status_line) 
+		+ 1), state->status_line);
 	printf("\e[%d;%dH", state->cur_y + 1, state->cur_x + line_offset + 2);
 	/*                                    cursor x     + line number + 1 
 	 *                                    for ANSI, 1 for space */
