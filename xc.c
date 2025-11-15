@@ -2,7 +2,7 @@
  * xc
  * by stx4
  */
-	
+
 #define _POSIX_SOURCE
 
 #include <fcntl.h>
@@ -21,11 +21,16 @@
 #include <stdbool.h>
 #endif
 
+#define BACKUP_FILE "~/.xcbackup"
+
 /* --- PROGRAM STRUCTURES --- */
 
-typedef enum { ADD, DEL } xc_op_type;
 typedef enum { COMMAND, INSERT } xc_mode;
 enum { UP, DOWN, RIGHT, LEFT, PGUP, PGDN };
+
+typedef enum { 
+	DEFAULT, STRING, COMMENT, PREPROCESSOR 
+} xc_hl_state_t;
 
 typedef struct {
 	int cap;
@@ -55,16 +60,15 @@ typedef struct {
 	xc_buffer_t buffer;
 } xc_state_t;
 
-/* typedef struct {
-	char* text;
-	xc_op_type type;
-	int line, offset;
-} xc_operation_t; */
-
-/* --- SETTINGS --- */
+/* --- SYNTAX SETTINGS --- */
 
 #define TAB_WIDTH 4
-#define BACKUP_FILE "~/.~xcbackup"
+
+#define TYPE_PREFIX         "\e[32m"
+#define STRING_PREFIX       "\e[35m"
+#define COMMENT_PREFIX      "\e[90m"
+#define KEYWORD_PREFIX      "\e[33m"
+#define PREPROCESSOR_PREFIX "\e[36m"
 
 char* proc[] = {
 	"#include", "#define", "#undef", "#if", "#ifdef",
@@ -86,13 +90,11 @@ char* keywords[] = {
 	"volatile", "while", "struct", "enum", "true", "false"
 };
 
-/* --- SYNTAX --- */
-
 int proc_len = sizeof(proc) / sizeof(proc[0]);
 int types_len = sizeof(types) / sizeof(types[0]);
 int keywords_len = sizeof(keywords) / sizeof(keywords[0]);
 
-int is_delim(char c) {
+bool is_delim(char c) {
 	switch (c) {
 		case ' ': case '(': case ')': case ';':
 		case '[': case ']': case '{': case '}':
@@ -100,13 +102,9 @@ int is_delim(char c) {
 		case '<': case '>': case '&': case '|':
 		case '^': case '~': case '?': case ':':
 		case '*': case '\'': case '"': return true;
-		default: return false;
 	}
+	return false;
 }
-
-/* --- EDIT LOG --- */
-
-/* PLANNED FOR LATER */
 
 /* --- UTILITIES --- */
 
@@ -118,6 +116,12 @@ int count_dig(int n) {
 	while (n > 0) n /= 10, count++;
 
 	return count;
+}
+
+bool is_token(char* token, char** array, int array_len) {
+	for (int i = 0; i < array_len; i++)
+		if (!strcmp(token, array[i])) return true;
+	return false;
 }
 
 /* --- KEYBOARD --- */
@@ -155,91 +159,100 @@ int get_key(void) {
 
 /* --- CURSOR --- */
 
-int get_cur_x(xc_state_t* state) {
+void set_cur_x(xc_state_t* state) {
 	int i = 0, cur_x = 0;
 	int len    = state->buffer.lines[state->buf_y].cap;
 	char* line = state->buffer.lines[state->buf_y].text;
 	while (i < state->buf_x && i < len) {
-		if (line[i] == '\t') cur_x += 4;
-		else cur_x++;
+		if (line[i] == '\t') cur_x += TAB_WIDTH; else cur_x++;
 		i++;
 	}
-	return cur_x;
+	state->cur_x = cur_x;
 }
 
 /* --- STATE DRAWING --- */
 
+void flush_token(char* token, int* tok_len) {
+	if (tok_len == 0) return;
+	token[*tok_len] = 0;
+	if (is_token(token, types, types_len))
+		printf(TYPE_PREFIX "%s\e[0m", token);	
+	else if (is_token(token, keywords, keywords_len))
+		printf(KEYWORD_PREFIX "%s\e[0m", token);
+	else if (is_token(token, proc, proc_len))
+		printf(PREPROCESSOR_PREFIX "%s\e[0m", token);
+	else printf("%s", token);
+	*tok_len = 0;
+}
+
 void draw_line(xc_state_t* state, int line_num) {
 	if (line_num > state->buffer.count) return;
+
 	char* line = state->buffer.lines[line_num].text;
 	int len = state->buffer.lines[line_num].cap;
 
 	int tok_len = 0;
 	char token[len];
-	bool in_string = false;
-	bool in_preprocessor = false;
-	for (int i = 0; i < len; i++) {
-		if (line[i] == '\t') {
+	xc_hl_state_t hl_state = DEFAULT;
+
+	for (int i = 0; line[i]; i++) {
+		char c = line[i];
+		char n = line[i + 1];
+		char p = 0;
+		if (i > 0) p = line[i - 1];
+
+		if (c == '\t') {
 			printf("%*s", TAB_WIDTH, "");
 			continue;
 		}
 
-		if (!state->syntax_highlight) {
-			putchar(line[i]);
-			continue;
-		}
-
-		if ((line[i] == '"' || (in_preprocessor && (line[i] == '<' 
-			|| line[i] == '>'))) && (i == 0 || (line[i - 1] != '\\'
-			&& line[i - 1] != '\''))) {
-
-			in_string = !in_string;
-			printf("\e[0;35m%c\e[0m", line[i]);
-			continue;
-		}
-
-		if (in_string) {
-			printf("\e[0;35m%c\e[0m", line[i]);
-			continue;
-		}
-
-		if (line[i] == '#' && (i == 0 || line[i - 1] != '\\') &&
-			line[i - 1] != '\'') {
-			in_preprocessor = true;
-			printf("\e[0;36m%c\e[0m", line[i]);
-			continue;
-		}
-
-		if (in_preprocessor) {
-			printf("\e[0;36m%c\e[0m", line[i]);
-			continue;
-		}
-
-		token[tok_len++] = line[i], token[tok_len] = 0;
-
-		if (is_delim(line[i]) || line[i + 1] == 0) {
-			char delim = 0;
-			if (is_delim(token[tok_len - 1]))
-				delim = token[tok_len - 1],
-				token[tok_len - 1] = 0;
-
-			for (int j = 0; j < keywords_len; j++) {
-				if (!strcmp(token, keywords[j]))
-					printf("\e[0;33m");
-			}
-			for (int j = 0; j < proc_len; j++) {
-				if (!strcmp(token, proc[j]))
-					printf("\e[0;34m");
-			}
-			for (int j = 0; j < types_len; j++) {
-				if (!strcmp(token, types[j]))
-					printf("\e[0;32m");
+		switch (hl_state) {
+		case DEFAULT:
+			if (c == '"' && p != '\\' && p != '\'') {
+				flush_token(token, &tok_len);
+				hl_state = STRING;
+				printf(STRING_PREFIX "%c", c);
+				continue;
+			} else if (c == '#' && n != '\'') {
+				hl_state = PREPROCESSOR;
+				printf(PREPROCESSOR_PREFIX "%c", c);
+				continue;
+			} else if ((c == '/' && n == '/')) {
+				hl_state = COMMENT;
+				printf(COMMENT_PREFIX "%c%c", c, n);
+				i++;
+				continue;
 			}
 
-			printf("%s\e[0m%c", token, delim);
-			token[0] = 0, tok_len = 0;
+			if (is_delim(c) || n == 0) {
+				token[tok_len] = 0;
+				flush_token(token, &tok_len);
+				tok_len = 0;
+
+				hl_state = DEFAULT;
+				printf("%c", c);
+				continue;
+			} else {
+				token[tok_len++] = c;
+			}
+			break;
+		case STRING:
+			printf(STRING_PREFIX "%c", c);
+			if (c == '"' && p != '\\') {
+				hl_state = DEFAULT;
+				printf("\e[0m");
+			}
+			break;
+		case COMMENT:
+			printf(COMMENT_PREFIX "%c", c);
+			break;
+		case PREPROCESSOR:
+			printf(PREPROCESSOR_PREFIX "%c", c);
+			break;
 		}
 	}
+
+	flush_token(token, &tok_len);
 	putchar('\n');
 }
 
@@ -284,6 +297,7 @@ bool state_init(xc_state_t* state, char* path) {
 	int fd = open(path, O_RDONLY);
 	if (!fd) {
 		fd = open(path, O_RDWR | O_CREAT, 0644);
+		if (fd) while(1);
 		if (!fd) return false;
 	}
 
@@ -541,7 +555,7 @@ void state_step(xc_state_t* state) {
 	if (state->buf_x > line_len) state->buf_x = line_len;
 
 	/* set cursor position */
-	state->cur_x = get_cur_x(state);
+	set_cur_x(state);
 	state->cur_y = CUR_Y;
 
 	/* FUCKIN REDRAW (i forgot this early rewrite) */
