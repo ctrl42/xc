@@ -3,6 +3,8 @@
  * by stx4
  */
 
+/* if your compiler does not assume C23 or newer - i don't think any do,
+ * set it or bring your own strdup. never using slackware ever now */
 #define _POSIX_SOURCE
 
 #include <fcntl.h>
@@ -275,7 +277,7 @@ void state_draw(xc_state_t* state) {
 
 	printf("\e[%d;1H\e[48;5;236m\e[38m%*s\e[%d;1H", state->scr_h + 1,
 		state->scr_w, "", state->scr_h);
-	sprintf(state->status_line, "%d,%d-%d  %5.1f%%", state->buf_y + 1, 
+	snprintf(state->status_line, 31, "%d,%d-%d  %5.1f%%", state->buf_y + 1, 
 		state->buf_x, state->cur_x + 1, state->buf_y > 0 ? 
 		(double)state->buf_y / (state->buffer.count - 1) * 100.0 : 0.0);
 	printf("%s%s    %s\e[%d;%dH%s\e[0m", state->filename,
@@ -348,7 +350,7 @@ bool state_init(xc_state_t* state, char* path) {
 	state->running = true;
 	char* extension = strrchr(path, '.');
 	/* C is pure */
-	if (extension && extension + 1 != 0 && !strcmp(extension + 1, "c"))
+	if (extension && (extension + 1 != 0) && (!strcmp(extension + 1, "c")))
 		state->syntax_highlight = true;
 
 	struct winsize ws;
