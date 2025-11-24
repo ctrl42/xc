@@ -215,7 +215,7 @@ void flush_token(char* token, int* tok_len) {
 	*tok_len = 0;
 }
 
-void draw_line(xc_state_t* state, xc_line_t* line) {
+void draw_line(xc_line_t* line) {
 	char* text = line->text;
 	int len = line->cap;
 
@@ -301,7 +301,7 @@ void state_draw(xc_state_t* state, bool full_draw) {
 			if (!full_draw)printf("\e[%d;1H", i-state->buffer.scroll+1);
 			printf("\e[2K\e[0;%dm%*d\e[0m ", i == state->buf_y ? 39 : 90, 
 				line_offset, i + 1);
-			draw_line(state, &line);
+			draw_line(&line);
 		}
 	}
 
