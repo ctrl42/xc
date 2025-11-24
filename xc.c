@@ -152,7 +152,6 @@ int get_key(void) {
 		case 75: return LEFT;
 		case 73: return PGUP;
 		case 81: return PGDN;
-		default: return c;
 		}
 	}
 	return c;
@@ -299,8 +298,7 @@ void state_draw(xc_state_t* state, bool full_draw) {
 			xc_line_t line = state->buffer.lines[i];
 			if (!full_draw && line.render_dirty == false) continue;
 			if (!full_draw)printf("\e[%d;1H", i-state->buffer.scroll+1);
-			printf("\e[2K\e[0;%dm%*d\e[0m ", i == state->buf_y ? 39 : 90, 
-				line_offset, i + 1);
+			printf("\e[2K\e[0;90m%*d\e[0m ", line_offset, i + 1);
 			draw_line(&line);
 		}
 	}
