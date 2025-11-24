@@ -507,13 +507,6 @@ void state_insert(xc_state_t* state, char c) {
 		memcpy(new_line->text, &line->text[state->buf_x], broken_len);
 		new_line->text[broken_len] = 0;
 		new_line->render_dirty = true;
-		
-		if (broken_len == 0) {
-			int i = 0;
-			while (line->text[i] == ' ' || line->text[i] == '\t') i++;
-			memcpy(new_line->text, line->text, i - 1);
-			new_line->text[i] = 0;
-		}
 
 		line->cap = state->buf_x;
 		line->text[state->buf_x] = 0;
