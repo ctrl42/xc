@@ -3,32 +3,42 @@
  * by stx4
  */
 
-/* if your compiler does not assume C23 or newer - i don't think any do,
- * set it or bring your own strdup. never using slackware ever now */
 #define _POSIX_SOURCE
 
 #include <fcntl.h>
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <string.h>
 #include <limits.h>
-#include <termios.h>
 #include <sys/stat.h>
-#include <sys/ioctl.h>
-#include <sys/select.h>
 
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ < 202311L
 #include <stdbool.h>
 #endif
 
-#define BACKUP_FILE "~/.xcbackup"
+#if defined(__unix__) || defined(__APPLE__)
+#define _XC_UNIX
+#include <unistd.h>
+#include <termios.h>
+#include <sys/ioctl.h>
+#include <sys/select.h>
+#endif
 
-/* --- PROGRAM STRUCTURES --- */
+#ifdef _WIN32
+#define _XC_WIN
+#include <Windows.h>
+#include <conio.h>
+#endif
 
-typedef enum { COMMAND, INSERT } xc_mode;
-enum { UP, DOWN, RIGHT, LEFT, PGUP, PGDN };
+#define BACKUP_FILE ".xcbackup"
+
+// --- PROGRAM STRUCTURES ---
+
+#define SPECIAL_KEY_START 1000
+
+typedef enum { COMMAND, INSERT } xc_mode_t;
+enum { UP = SPECIAL_KEY_START, DOWN, RIGHT, LEFT, PGUP, PGDN };
 
 typedef enum { 
 	DEFAULT, STRING, COMMENT, PREPROCESSOR 
@@ -38,6 +48,7 @@ typedef struct {
 	int cap;
 	int size;
 	char* text;
+	bool render_dirty;
 } xc_line_t;
 
 typedef struct {
@@ -51,18 +62,18 @@ typedef struct {
 	bool running;
 	bool syntax_highlight;
 
-	int scr_w, scr_h;
+	int win_w, win_h;
 	int buf_x, buf_y;
 	int cur_x, cur_y;
 
 	char* filename;
 	char status_line[32];
 
-	xc_mode mode;
+	xc_mode_t mode;
 	xc_buffer_t buffer;
 } xc_state_t;
 
-/* --- SYNTAX SETTINGS --- */
+// --- SYNTAX SETTINGS ---
 
 #define TAB_WIDTH 4
 
@@ -108,7 +119,7 @@ bool is_delim(char c) {
 	return false;
 }
 
-/* --- UTILITIES --- */
+// --- UTILITIES ---
 
 int count_dig(int n) {
 	if (n == 0) return 1;
@@ -126,14 +137,30 @@ bool is_token(char* token, char** array, int array_len) {
 	return false;
 }
 
-/* --- KEYBOARD --- */
+// --- KEYBOARD ---
 
 int get_key(void) {
-	char c;
+	int c = 0;
+#ifdef _XC_WIN
+	c = _getch();
+	if (c == 0 || c == 0xE0) {
+		int c = _getch();
+		switch (c) {
+		case 72: return UP;
+		case 80: return DOWN;
+		case 77: return RIGHT;
+		case 75: return LEFT;
+		case 73: return PGUP;
+		case 81: return PGDN;
+		default: return c;
+		}
+	}
+	return c;
+#elif defined(_XC_UNIX)
 	if (read(0, &c, 1) != 1) return -1;
 	if (c != '\e') return c;
 
-	struct timeval tv = {0, 20000};
+	struct timeval tv = { 0, 20000 };
 	fd_set fds;
 	FD_ZERO(&fds);
 	FD_SET(0, &fds);
@@ -149,17 +176,18 @@ int get_key(void) {
 	if (esc[0] != '[') return '\e';
 	switch (esc[1]) {
 		case 'A': case 'B': case 'C': case 'D':
-			return esc[1] - 'A';
+			return esc[1] - 'A' + SPECIAL_KEY_START;
 		case '5': case '6': {
 			read(0, &esc[2], 1);
 			if (esc[2] != '~') return '\e';
-			return esc[1] - '0' - 1;
+			return esc[1] - '0' - 1 + SPECIAL_KEY_START;
 		}
 	}
 	return '\e';
+#endif
 }
 
-/* --- CURSOR --- */
+// --- CURSOR ---
 
 void set_cur_x(xc_state_t* state) {
 	int i = 0, cur_x = 0;
@@ -172,7 +200,7 @@ void set_cur_x(xc_state_t* state) {
 	state->cur_x = cur_x;
 }
 
-/* --- STATE DRAWING --- */
+// --- STATE DRAWING ---
 
 void flush_token(char* token, int* tok_len) {
 	if (tok_len == 0) return;
@@ -187,21 +215,20 @@ void flush_token(char* token, int* tok_len) {
 	*tok_len = 0;
 }
 
-void draw_line(xc_state_t* state, int line_num) {
-	if (line_num > state->buffer.count) return;
-
-	char* line = state->buffer.lines[line_num].text;
-	int len = state->buffer.lines[line_num].cap;
+void draw_line(xc_state_t* state, xc_line_t* line) {
+	char* text = line->text;
+	int len = line->cap;
 
 	int tok_len = 0;
-	char token[len];
+	char* token = malloc(len + 1);
+	if (!token) return;
 	xc_hl_state_t hl_state = DEFAULT;
 
-	for (int i = 0; line[i]; i++) {
-		char c = line[i];
-		char n = line[i + 1];
+	for (int i = 0; text[i]; i++) {
+		char c = text[i];
+		char n = text[i + 1];
 		char p = 0;
-		if (i > 0) p = line[i - 1];
+		if (i > 0) p = text[i - 1];
 
 		if (c == '\t') {
 			printf("%*s", TAB_WIDTH, "");
@@ -255,35 +282,38 @@ void draw_line(xc_state_t* state, int line_num) {
 	}
 
 	flush_token(token, &tok_len);
+	free(token);
 	putchar('\n');
 }
 
-void state_draw(xc_state_t* state) {
+void state_draw(xc_state_t* state, bool full_draw) {
 	int line_offset = count_dig(state->buffer.count);
 
 	printf("\e[?25l\e[1;1H");
-	for (int i = state->buffer.scroll; i < state->scr_h +
+	for (int i = state->buffer.scroll; i < state->win_h +
 		state->buffer.scroll - 1; i++) {
-		printf("\33[2K\r");
 		if (i >= state->buffer.count) {
 			printf("\e[0;90m%.*s\n\e[0m", count_dig(state->buffer.count), 
 				"~");
 		} else {
-			printf("\e[0;%dm%*d\e[0m ", i == state->buf_y ? 39 : 90, 
+			xc_line_t line = state->buffer.lines[i];
+			if (!full_draw && line.render_dirty == false) continue;
+			if (!full_draw)printf("\e[%d;1H", i-state->buffer.scroll+1);
+			printf("\e[2K\e[0;%dm%*d\e[0m ", i == state->buf_y ? 39 : 90, 
 				line_offset, i + 1);
-			draw_line(state, i);
+			draw_line(state, &line);
 		}
 	}
 
-	printf("\e[%d;1H\e[48;5;236m\e[38m%*s\e[%d;1H", state->scr_h + 1,
-		state->scr_w, "", state->scr_h);
+	printf("\e[0m\e[%d;1H\e[48;5;236m\e[38m%*s\e[%d;1H", state->win_h + 1,
+		state->win_w, "", state->win_h);
 	snprintf(state->status_line, 31, "%d,%d-%d  %5.1f%%", state->buf_y + 1, 
 		state->buf_x, state->cur_x + 1, state->buf_y > 0 ? 
 		(double)state->buf_y / (state->buffer.count - 1) * 100.0 : 0.0);
 	printf("%s%s    %s\e[%d;%dH%s\e[0m", state->filename,
 		state->dirty ? "*" : " ",
 		state->mode == INSERT ? "-- insert --" : "", 
-		state->scr_h + 1, (int)(state->scr_w - strlen(state->status_line) 
+		state->win_h + 1, (int)(state->win_w - strlen(state->status_line) 
 		+ 1), state->status_line);
 	printf("\e[%d;%dH", state->cur_y + 1, state->cur_x + line_offset + 2);
 	/*                                    cursor x     + line number + 1 
@@ -293,14 +323,13 @@ void state_draw(xc_state_t* state) {
 	fflush(stdout);
 }
 
-/* --- STATE HANDLERS --- */
+// --- STATE HANDLERS ---
 
 bool state_init(xc_state_t* state, char* path) {
 	int fd = open(path, O_RDONLY);
-	if (!fd) {
+	if (fd < 0) {
 		fd = open(path, O_RDWR | O_CREAT, 0644);
-		if (fd) while(1);
-		if (!fd) return false;
+		if (fd < 0) return false;
 	}
 
 	struct stat st;
@@ -321,11 +350,17 @@ bool state_init(xc_state_t* state, char* path) {
 	int last = 0, cur_line = 0;
 	state->buffer.lines = calloc(state->buffer.count, sizeof(xc_line_t));
 	for (int i = 0; i < st.st_size; i++) {
+		if (raw_buffer[i] == '\r') {
+			if (i + 1 < st.st_size && raw_buffer[i + 1] == '\n') i++;
+			raw_buffer[i] = '\n';
+		}
+		
 		if (raw_buffer[i] == '\n') {
 			int len = i - last;
 			xc_line_t* cur = &state->buffer.lines[cur_line];
 			cur->cap = len;
 			cur->size = len + 32;
+			cur->render_dirty = false;
 			cur->text = calloc(1, cur->size);
 			memcpy(cur->text, raw_buffer + last, len);
 
@@ -342,6 +377,7 @@ bool state_init(xc_state_t* state, char* path) {
 		xc_line_t* line = &state->buffer.lines[0];
 		line->cap = 0;
 		line->size = 32;
+		line->render_dirty = false;
 		line->text = calloc(line->size, 1);
 	}
 
@@ -349,14 +385,29 @@ bool state_init(xc_state_t* state, char* path) {
 	state->dirty = false;
 	state->running = true;
 	char* extension = strrchr(path, '.');
-	/* C is pure */
 	if (extension && (extension + 1 != 0) && (!strcmp(extension + 1, "c")))
 		state->syntax_highlight = true;
 
+#ifdef _XC_WIN
+	CONSOLE_SCREEN_BUFFER_INFO csbi;
+	HANDLE hstdout = GetStdHandle(STD_OUTPUT_HANDLE);
+
+	if (!GetConsoleScreenBufferInfo(hstdout, &csbi)) return false;
+	state->win_w = csbi.srWindow.Right  - csbi.srWindow.Left + 1;
+	state->win_h = csbi.srWindow.Bottom - csbi.srWindow.Top  + 1;
+
+	// also, enable ANSI escapes while we're at it.
+	DWORD mode = 0;
+	if (!GetConsoleMode(hstdout, &mode)) return false;
+	mode |= 0x04; // ENABLE_VIRTUAL_TERMINAL_PROCESSING
+	mode |= ENABLE_PROCESSED_OUTPUT;
+	SetConsoleMode(hstdout, mode);
+#elif defined(_XC_UNIX)
 	struct winsize ws;
 	ioctl(0, TIOCGWINSZ, &ws);
-	state->scr_w = ws.ws_col;
-	state->scr_h = ws.ws_row;
+	state->win_w = ws.ws_col;
+	state->win_h = ws.ws_row;
+#endif
 
 	state->buf_x = 0;
 	state->buf_y = 0;
@@ -379,7 +430,11 @@ void state_trash(xc_state_t* state) {
 }
 
 bool state_write(xc_state_t* state, char* filename) {
-	int fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	int flags = O_WRONLY | O_CREAT | O_TRUNC;
+#ifdef _XC_WIN
+	flags |= O_BINARY; // Windows, don't convert to CRLF
+#endif
+	int fd = open(filename, flags, 0644);
 	if (fd < 0) return false;
 
 	for (int i = 0; i < state->buffer.count; i++) {
@@ -414,6 +469,7 @@ void state_insert(xc_state_t* state, char c) {
 			memcpy(prev->text + prev->cap, line->text, line->cap);
 			prev->cap += line->cap;
 			prev->text[prev->cap] = 0;
+			prev->render_dirty = true;
 
 			free(line->text);
 			memmove(&buf->lines[state->buf_y],
@@ -428,6 +484,7 @@ void state_insert(xc_state_t* state, char c) {
 				&line->text[state->buf_x],
 				line->cap - state->buf_x + 1);
 			line->cap--;
+			line->render_dirty = true;
 			state->buf_x--;
 		}
 		break;
@@ -441,8 +498,8 @@ void state_insert(xc_state_t* state, char c) {
 			&buf->lines[state->buf_y + 1],
 			sizeof(xc_line_t) * (buf->count - state->buf_y - 1));
 
-		/* MEMORY HAS SHIFTED! */
 		line = &buf->lines[state->buf_y];
+		line->render_dirty = true;
 
 		xc_line_t* new_line = &buf->lines[state->buf_y + 1];
 		int broken_len = line->cap - state->buf_x;
@@ -451,6 +508,7 @@ void state_insert(xc_state_t* state, char c) {
 		new_line->text = malloc(new_line->size);
 		memcpy(new_line->text, &line->text[state->buf_x], broken_len);
 		new_line->text[broken_len] = 0;
+		new_line->render_dirty = true;
 
 		line->cap = state->buf_x;
 		line->text[state->buf_x] = 0;
@@ -471,6 +529,7 @@ void state_insert(xc_state_t* state, char c) {
 			line->cap - state->buf_x + 1);
 		line->text[state->buf_x] = c;
 		line->cap++;
+		line->render_dirty = true;
 		state->buf_x++;
 		break;
 	}
@@ -480,40 +539,24 @@ void state_insert(xc_state_t* state, char c) {
 		break;
 	}
 
-	state->dirty = true;
-}
-
-void state_command(xc_state_t* state, char c) {
-	switch (c) {
-	case 'i': state->mode = INSERT; break;
-	case 'q': if (!state->dirty) state->running = false; break;
-	case 'w': state_write(state, state->filename); break;
-	case 's': state_write(state, state->filename); 
-			  state->running = false; break;
-
-	case '.': state->buffer.scroll = state->buffer.count - 
-		state->scr_h + 1, state->buf_y = state->buffer.count - 1; break;
-	case ',': state->buffer.scroll = 0, state->buf_y = 0; break;
-
-	case ';': state->buf_x = 0; break;
-	case '\'': state->buf_x = INT_MAX; break;
-	}
+	if (c != '\e') state->dirty = true;
 }
 
 #define CUR_Y (state->buf_y - state->buffer.scroll)
 
 void state_step(xc_state_t* state) {
-	char c = get_key();
+	int c = get_key();
 	int cur_y = CUR_Y;
+	bool scroll_draw = false;
 	
 	switch (c) {
 	case UP:
-		if (cur_y <= 0) state->buffer.scroll--;
+		if (cur_y <= 0) state->buffer.scroll--, scroll_draw = true;
 		state->buf_y--;
 		break;
 	case DOWN:
-		if (cur_y >= state->scr_h - 2) state->buffer.scroll++, 
-			state->buf_y++;
+		if (cur_y >= state->win_h - 2) state->buffer.scroll++, 
+			state->buf_y++, scroll_draw = true;
 		else state->buf_y++;
 		break;
 	case LEFT:
@@ -523,16 +566,18 @@ void state_step(xc_state_t* state) {
 		state->buf_x++;
 		break;
 	case PGUP:
-		state->buffer.scroll -= state->scr_h - 1; 
-		state->buf_y -= state->scr_h - 1;
+		state->buffer.scroll -= state->win_h - 1; 
+		state->buf_y -= state->win_h - 1;
+		scroll_draw = true;
 		break;
 	case PGDN:
-		state->buffer.scroll += state->scr_h - 1;
-		state->buf_y += state->scr_h - 1;
+		state->buffer.scroll += state->win_h - 1;
+		state->buf_y += state->win_h - 1;
+		scroll_draw = true;
 		break;
 	}
 
-	/* clamp */
+	// clamp 
 	if (state->buffer.scroll < 0) state->buffer.scroll = 0;
 	if (state->buffer.scroll > state->buffer.count - 1) 
 		state->buffer.scroll = state->buffer.count - 1;
@@ -545,30 +590,50 @@ void state_step(xc_state_t* state) {
 	if (state->buf_x < 0) state->buf_x = 0;
 	if (state->buf_x > line_len) state->buf_x = line_len;
 
-	/* handle insert/command */
-	switch (state->mode) {
-		case INSERT:  state_insert(state, c);  break;
-		case COMMAND: state_command(state, c); break;
+	// handle insert/command
+	if (state->mode == INSERT) state_insert(state, c);
+	if (state->mode == COMMAND) switch (c) {
+	case 'i': state->mode = INSERT; break;
+	case 'q': if (!state->dirty) state->running = false; break;
+	case 'w': state_write(state, state->filename); break;
+	case 's': state_write(state, state->filename); 
+		state->running = false; break;
+
+	case '.': state->buffer.scroll = state->buffer.count - 
+		state->win_h + 1, state->buf_y = state->buffer.count - 1;
+		scroll_draw = true; break;
+	case ',': state->buffer.scroll = 0, state->buf_y = 0; 
+		scroll_draw = true; break;
+
+	case ';': state->buf_x = 0; break;
+	case '\'': state->buf_x = INT_MAX; break; // hacky :C
 	}
 
-	/* another clamp for command mode safety */
+	// another clamp for command mode safety
 	line_len = state->buffer.lines[state->buf_y].cap;
 	if (state->buf_x < 0) state->buf_x = 0;
 	if (state->buf_x > line_len) state->buf_x = line_len;
 
-	/* set cursor position */
+	// set editor cursor position
 	set_cur_x(state);
 	state->cur_y = CUR_Y;
 
-	/* FUCKIN REDRAW (i forgot this early rewrite) */
-	state_draw(state);
+	// FUCKIN REDRAW (i forgot this early rewrite)
+	state_draw(state, scroll_draw);
 }
 
 int main(int argc, char* argv[]) {
+#ifdef _XC_UNIX
 	struct termios attr;
 	tcgetattr(0, &attr);
 	attr.c_lflag &= ~(ICANON | ECHO);
 	tcsetattr(0, TCSANOW, &attr);
+#endif
+
+	if (argc < 2) {
+		fprintf(stderr, "provide a file. usage: %s [path name]", argv[0]);
+		return 1;
+	}
 
 	xc_state_t state;
 	for (int i = 1; i < argc; i++) {
@@ -578,12 +643,14 @@ int main(int argc, char* argv[]) {
 			continue;
 		}
 
-		state_draw(&state);
+		state_draw(&state, true);
 		while (state.running) state_step(&state);
 		state_trash(&state);
 	}
 
+#ifdef _XC_UNIX
 	attr.c_lflag |= (ICANON | ECHO);
 	tcsetattr(0, TCSANOW, &attr);
+#endif
 	return 0;
 }
