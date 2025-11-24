@@ -297,7 +297,7 @@ void state_draw(xc_state_t* state, bool full_draw) {
 		} else {
 			xc_line_t line = state->buffer.lines[i];
 			if (!full_draw && line.render_dirty == false) continue;
-			printf("\e[2K\e[0;90m%*d\e[0m ", line_offset, i + 1);
+			printf("\e[2K\e[90m%*d\e[0m ", line_offset, i + 1);
 			draw_line(&line);
 		}
 	}
