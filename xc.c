@@ -282,22 +282,21 @@ void draw_line(xc_line_t* line) {
 
 	flush_token(token, &tok_len);
 	free(token);
-	putchar('\n');
 }
 
 void state_draw(xc_state_t* state, bool full_draw) {
 	int line_offset = count_dig(state->buffer.count);
 
-	printf("\e[?25l\e[1;1H");
+	printf("\e[?25l");
 	for (int i = state->buffer.scroll; i < state->win_h +
 		state->buffer.scroll - 1; i++) {
+		printf("\e[%d;1H", i - state->buffer.scroll + 1);
 		if (i >= state->buffer.count) {
-			printf("\e[2K\e[90m%.*s\n\e[0m", 
+			printf("\e[2K\e[90m%.*s\e[0m", 
 				count_dig(state->buffer.count), "~");
 		} else {
 			xc_line_t line = state->buffer.lines[i];
 			if (!full_draw && line.render_dirty == false) continue;
-			if (!full_draw)printf("\e[%d;1H", i-state->buffer.scroll+1);
 			printf("\e[2K\e[0;90m%*d\e[0m ", line_offset, i + 1);
 			draw_line(&line);
 		}
