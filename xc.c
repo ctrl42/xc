@@ -326,6 +326,10 @@ void state_draw(xc_state_t* state, bool full_draw) {
 
 bool state_init(xc_state_t* state, char* path) {
 	int fd = open(path, O_RDONLY);
+	if (fd < 0) {
+		fd = open(path, O_RDWR | O_CREAT, 0644);
+		if (fd < 0) return false;
+	}
 
 	struct stat st;
 	stat(path, &st);
