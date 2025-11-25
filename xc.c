@@ -3,7 +3,9 @@
  * by stx4
  */
 
+#ifndef _POSIX_SOURCE
 #define _POSIX_SOURCE
+#endif
 
 #include <fcntl.h>
 #include <ctype.h>
@@ -324,10 +326,6 @@ void state_draw(xc_state_t* state, bool full_draw) {
 
 bool state_init(xc_state_t* state, char* path) {
 	int fd = open(path, O_RDONLY);
-	if (fd < 0) {
-		fd = open(path, O_RDWR | O_CREAT, 0644);
-		if (fd < 0) return false;
-	}
 
 	struct stat st;
 	stat(path, &st);
@@ -382,7 +380,8 @@ bool state_init(xc_state_t* state, char* path) {
 	state->dirty = false;
 	state->running = true;
 	char* extension = strrchr(path, '.');
-	if (extension && (extension + 1 != 0) && (!strcmp(extension + 1, "c")))
+	if (extension && (*(extension + 1) != 0) &&
+		(!strcmp(extension + 1, "c")))
 		state->syntax_highlight = true;
 
 #ifdef _XC_WIN
@@ -426,7 +425,7 @@ void state_trash(xc_state_t* state) {
 	printf("\e[?1049l");
 }
 
-bool state_write(xc_state_t* state, char* filename) {
+bool state_write(xc_state_t* state, char* filename, bool full) {
 	int flags = O_WRONLY | O_CREAT | O_TRUNC;
 #ifdef _XC_WIN
 	flags |= O_BINARY; // Windows, don't convert to CRLF
@@ -445,7 +444,7 @@ bool state_write(xc_state_t* state, char* filename) {
 	}
 
 	close(fd);
-	state->dirty = false;
+	if (full) state->dirty = false;
 
 	return true;
 }
@@ -532,7 +531,7 @@ void state_insert(xc_state_t* state, char c) {
 	}
 	case '\e':
 		state->mode = COMMAND;
-		if (state->dirty) state_write(state, BACKUP_FILE);
+		if (state->dirty) state_write(state, BACKUP_FILE, false);
 		break;
 	}
 
@@ -592,8 +591,8 @@ void state_step(xc_state_t* state) {
 	if (state->mode == COMMAND) switch (c) {
 	case 'i': state->mode = INSERT; break;
 	case 'q': if (!state->dirty) state->running = false; break;
-	case 'w': state_write(state, state->filename); break;
-	case 's': state_write(state, state->filename); 
+	case 'w': state_write(state, state->filename, true); break;
+	case 's': state_write(state, state->filename, true); 
 		state->running = false; break;
 
 	case '.': state->buffer.scroll = state->buffer.count - 
