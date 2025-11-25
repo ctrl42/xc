@@ -422,9 +422,10 @@ bool state_init(xc_state_t* state, char* path) {
 
 void state_trash(xc_state_t* state) {
 	for (int i = 0; i < state->buffer.count; i++)
-		free(state->buffer.lines[i].text);
-	free(state->buffer.lines);
-	free(state->filename);
+		if (state->buffer.lines[i].text)
+			free(state->buffer.lines[i].text);
+	if (state->buffer.lines) free(state->buffer.lines);
+	if (state->filename) free(state->filename);
 
 	printf("\e[?1049l");
 }
@@ -432,7 +433,7 @@ void state_trash(xc_state_t* state) {
 bool state_write(xc_state_t* state, char* filename, bool full) {
 	int flags = O_WRONLY | O_CREAT | O_TRUNC;
 #ifdef _XC_WIN
-	flags |= O_BINARY; // Windows, don't convert to CRLF
+	flags |= O_BINARY; // Windows, don't convert to CRLF. Asshole
 #endif
 	int fd = open(filename, flags, 0644);
 	if (fd < 0) return false;
@@ -469,7 +470,6 @@ void state_insert(xc_state_t* state, char c) {
 			memcpy(prev->text + prev->cap, line->text, line->cap);
 			prev->cap += line->cap;
 			prev->text[prev->cap] = 0;
-			prev->render_dirty = true;
 
 			free(line->text);
 			memmove(&buf->lines[state->buf_y],
@@ -479,6 +479,11 @@ void state_insert(xc_state_t* state, char c) {
 
 			state->buf_y--;
 			state->buf_x = new_buf_x;
+
+			for (int i = state->buf_y; i < state->buffer.scroll +
+				state->win_h && i < state->buffer.count; i++) {
+				state->buffer.lines[i].render_dirty = true;
+			}
 		} else {
 			memmove(&line->text[state->buf_x - 1],
 				&line->text[state->buf_x],
@@ -622,6 +627,10 @@ void state_step(xc_state_t* state) {
 	state_draw(state, scroll_draw);
 }
 
+#ifdef _XVUTILS
+#define main xc_main
+#endif
+
 int main(int argc, char* argv[]) {
 #ifdef _XC_UNIX
 	struct termios attr;
@@ -631,7 +640,7 @@ int main(int argc, char* argv[]) {
 #endif
 
 	if (argc < 2) {
-		fprintf(stderr, "provide a file. usage: %s [path name]", argv[0]);
+		fprintf(stderr, "provide a file. usage: %s [path name]\n", argv[0]);
 		return 1;
 	}
 
@@ -654,3 +663,5 @@ int main(int argc, char* argv[]) {
 #endif
 	return 0;
 }
+
+#undef main
