@@ -29,6 +29,7 @@
 
 #ifdef _WIN32
 #define _XC_WIN
+#define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 #include <conio.h>
 #endif
