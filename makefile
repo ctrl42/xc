@@ -2,7 +2,7 @@ BUILD=bin
 
 # C compiler
 CC=clang
-CFLAGS=-std=c2x -Wall -Wextra -Werror -Wshadow
+CFLAGS=-std=c2x -Wall -Wextra -Werror -Wshadow -Wno-format-truncation
 
 # General
 C_SOURCES=xc.c
